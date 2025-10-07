@@ -1,1 +1,132 @@
-
+clear; clc;
+% ---------- ENERGÍA REFERENCIA POR PLANTA Y RAMPA ----------
+E_ref_manual = [5412, 3011; % Uyuni
+6085, 936; % Oruro
+4246, 747]; % Uyuni + Oruro
+% ---------- ARCHIVOS Y POTENCIA NOMINAL ----------
+archivos = {
+'Uyuni2025Sin2deDiciembre.xlsx', 60000;
+'Oruro2025Sin2deDiciembre.xlsx', 100000;
+'PotenciaORURO_UYUNI.xlsx', 166000;
+};
+sitios = {'Uyuni', 'Oruro', 'Uyuni+Oruro'};
+T = 4; % segundos entre muestras
+rampas = [10, 20]; % rampas %/min
+K_vals = 6; % K fijo
+% ---------- MATRICES ----------
+num_archivos = size(archivos,1);
+num_rampas = length(rampas);
+num_K = length(K_vals);
+SOC_K = cell(num_archivos, num_rampas, num_K);
+% ---------- PROCESO PRINCIPAL ----------
+for a = 1:num_archivos
+filename = archivos{a, 1};
+Pnom = archivos{a, 2};
+tabla_datos = readtable(filename);
+% ---------- SOLO POTENCIA PV ----------
+P_FV_W = tabla_datos{:,3} * 1000; % potencia PV en W
+n = length(P_FV_W);
+tiempo = (0:n-1)*T; % tiempo en segundos
+% COLORES SEGÚN PLANTA
+if strcmp(sitios{a}, 'Oruro') || strcmp(sitios{a}, 'Uyuni+Oruro')
+colorPV = [1, 0.5, 0]; % anaranjado
+colorEN = [1, 0.5, 0]; % anaranjado
+colorSOC = [1, 0, 0]; % rojo anaranjado
+else
+colorPV = 'b'; % azul
+colorEN = 'b'; % azul
+colorSOC = 'r'; % rojo
+end
+colorPBAT = [0.8902, 0, 0.4157]; % rojo común
+for i = 1:num_rampas
+r_max = (rampas(i) / 60) / 100;
+deltaP_max = r_max * Pnom * T;
+for k_idx = 1:num_K
+K = K_vals(k_idx);
+P_bat = zeros(n,1);
+E_bat = zeros(n,1);
+Error = zeros(n,1);
+E_bat(1) = E_ref_manual(a,i);
+P_grid(1) = P_FV_W(1);
+for t = 2:n
+Error(t) = E_ref_manual(a,i) - E_bat(t-1);
+P_FV_consigna = P_FV_W(t) + K * Error(t-1);
+P_grid(t) = max(P_FV_W(t), P_FV_consigna);
+deltaP = P_grid(t) - P_grid(t-1);
+if abs(deltaP) > deltaP_max
+P_grid(t) = P_grid(t-1) + sign(deltaP) * deltaP_max;
+end
+P_bat(t) = P_grid(t) - P_FV_W(t);
+E_bat(t) = E_bat(t-1) + (P_bat(t) * T / 3600);
+end
+SOC_K{a,i,k_idx} = (E_bat / max(E_bat)) * 100;
+% ---------- FIGURA: POTENCIA (arriba) + ENERGÍA & SOC (abajo) ----------
+figure('Name', sprintf('Potencia, Energía y SOC - %s | %d%% | K=%d',
+sitios{a}, rampas(i), K), ...
+'NumberTitle', 'off', 'Position', [100 100 900 600]);
+% -------- Subplot 1: POTENCIAS --------
+subplot(2,1,1);
+hold on;
+plot(tiempo, P_FV_W / 1000, '-', 'Color', colorPV, 'LineWidth', 1.8,
+'DisplayName', 'PV (MW)');
+plot(tiempo, P_grid / 1000, '-', 'Color', 'g', 'LineWidth', 1.0,
+'DisplayName', 'PG (MW)');
+plot(tiempo, P_bat / 1000, '-', 'Color', colorPBAT, 'LineWidth', 1.5,
+'DisplayName', 'PBAT (MW)');
+xlabel('Tiempo (s)');
+ylabel('Potencia (MW)');
+title(sprintf('Potencias - %s | Rampa %d%% | K=%d', sitios{a}, rampas(i),
+K));
+legend('Location', 'best');
+grid on;
+% --- Máximo y mínimo de PBAT ---
+[maxPB, idxMaxPB] = max(P_bat);
+[minPB, idxMinPB] = min(P_bat);
+plot(tiempo(idxMaxPB), maxPB/1000, 'ro', 'MarkerFaceColor', 'r');
+plot(tiempo(idxMinPB), minPB/1000, 'bo', 'MarkerFaceColor', 'b');
+text(tiempo(idxMaxPB), maxPB/1000, sprintf('%.2f', maxPB/1000), ...
+'VerticalAlignment','bottom','HorizontalAlignment','right','FontSize',9,'Color','r');
+text(tiempo(idxMinPB), minPB/1000, sprintf('%.2f', minPB/1000), ...
+'VerticalAlignment','top','HorizontalAlignment','left','FontSize',
+9,'Color','b');
+% -------- Subplot 2: Energía y SOC --------
+subplot(2,1,2);
+[ax, h1, h2] = plotyy(tiempo, E_bat, tiempo, SOC_K{a,i,k_idx});
+set(h1, 'Color', colorEN, 'LineWidth', 1.5);
+set(h2, 'Color', colorSOC, 'LineWidth', 2.0);
+xlabel('Tiempo (s)');
+ylabel(ax(1), 'Energía (kWh)');
+ylabel(ax(2), 'SOC (%)');
+title(sprintf('Energía y SOC - %s | Rampa %d%% | K=%d', sitios{a}, rampas
+(i), K));
+set(ax(1), 'YColor', 'k');
+set(ax(2), 'YColor', colorSOC);
+grid on;
+% --- Máximo y mínimo de Energía ---
+[maxE, idxMaxE] = max(E_bat);
+[minE, idxMinE] = min(E_bat);
+hold(ax(1), 'on');
+plot(ax(1), tiempo(idxMaxE), maxE, 'ro', 'MarkerFaceColor', 'r');
+plot(ax(1), tiempo(idxMinE), minE, 'bo', 'MarkerFaceColor', 'b');
+axes(ax(1));
+text(tiempo(idxMaxE), maxE, sprintf('%.2f', maxE), ...
+'VerticalAlignment','bottom','HorizontalAlignment','right','FontSize',9,'Color','r');
+text(tiempo(idxMinE), minE, sprintf('%.2f', minE), ...
+'VerticalAlignment','top','HorizontalAlignment','left','FontSize',
+9,'Color','b');
+% --- Máximo y mínimo de SOC ---
+SOC_data = SOC_K{a,i,k_idx};
+[maxSOC, idxMaxSOC] = max(SOC_data);
+[minSOC, idxMinSOC] = min(SOC_data);
+hold(ax(2), 'on');
+plot(ax(2), tiempo(idxMaxSOC), maxSOC, 'ro', 'MarkerFaceColor', 'r');
+plot(ax(2), tiempo(idxMinSOC), minSOC, 'bo', 'MarkerFaceColor', 'b');
+axes(ax(2));
+text(tiempo(idxMaxSOC), maxSOC, sprintf('%.2f%%', maxSOC), ...
+'VerticalAlignment','bottom','HorizontalAlignment','right','FontSize',9,'Color','r');
+text(tiempo(idxMinSOC), minSOC, sprintf('%.2f%%', minSOC), ...
+'VerticalAlignment','top','HorizontalAlignment','left','FontSize',
+9,'Color','b');
+end
+end
+end
