@@ -1,0 +1,117 @@
+archivos = {
+'Uyuni2025Sin2deDiciembre.xlsx', 60000;
+'Oruro2025Sin2deDiciembre.xlsx', 100000;
+'PotenciaORURO_UYUNI.xlsx', 166000;
+};
+sitios = {'Uyuni', 'Oruro', 'Uyuni+Oruro'};
+T = 4; % tiempo entre muestras en segundos
+colors = lines(length(archivos));
+umbral_ruido = 0.5; % %/min mínimo para considerar una rampa real
+% ---------- VARIABLES PARA GUARDAR RAMPAS ----------
+rampas_por_sitio = cell(1, length(archivos));
+rampas_por_hora = cell(1, length(archivos));
+% ---------- LECTURA Y CÁLCULO DE RAMPAS CON FILTRO DE HORARIO ----------
+for a = 1:length(archivos)
+filename = archivos{a, 1};
+Pnom = archivos{a, 2};
+tabla_datos = readtable(filename);
+fecha = datetime(tabla_datos{:,1});
+if isnumeric(tabla_datos{1,2})
+hora = timeofday(datetime(tabla_datos{:,2}, 'ConvertFrom','excel'));
+else
+hora = timeofday(datetime(tabla_datos{:,2}, 'InputFormat','HH:mm:ss'));
+end
+tiempo = fecha + hora;
+potencia = tabla_datos{:,3} * 1000; % convertir a W
+% --- Filtrar horario 6AM a 6PM ---
+h = hour(tiempo);
+idx_horario = (h >= 6) & (h <= 18);
+tiempo = tiempo(idx_horario);
+potencia = potencia(idx_horario);
+% --- Eliminar NaN y ceros ---
+valido = ~isnan(potencia) & potencia ~= 0;
+potencia = potencia(valido);
+tiempo = tiempo(valido);
+if length(potencia) < 2
+warning('Archivo %s tiene pocos datos tras limpiar.', filename);
+continue;
+end
+% --- Calcular rampas (%/min) ---
+rampas = diff(potencia) / Pnom * (60 / T) * 100;
+tiempo_rampas = tiempo(2:end);
+% --- Eliminar ruido e inválidos ---
+indices_validos = ~isnan(rampas) & ~isinf(rampas) & abs(rampas) > umbral_ruido;
+rampas = rampas(indices_validos);
+tiempo_rampas = tiempo_rampas(indices_validos);
+rampas_por_sitio{a} = rampas;
+% Agrupar por hora para heatmap y conteo (solo horas 6-18)
+horas = hour(tiempo_rampas);
+rampas_por_hora{a} = arrayfun(@(hh) rampas(horas==hh), 6:18, 'UniformOutput',
+false);
+end
+% --------------------- 1. HISTOGRAMA DE RAMPAS ---------------------
+figure('Name','1. Histograma de Rampas');
+for a = 1:length(archivos)
+subplot(1,length(archivos),a)
+histogram(rampas_por_sitio{a}, 'BinWidth', 0.2, 'FaceColor', colors(a,:));
+title(['Histograma - ', sitios{a}]);
+xlabel('Rampa (%/min)');
+ylabel('Frecuencia');
+grid on
+end
+% --------------------- 2. BOXPLOT DE RAMPAS ---------------------
+figure('Name','2. Boxplot de Rampas', 'Color','w');
+datos_box = cell2mat(rampas_por_sitio');
+grupos = repelem(1:length(sitios), cellfun(@length, rampas_por_sitio));
+boxplot(datos_box, grupos, 'Colors', colors, 'Widths', 0.5, 'Symbol','o');
+set(gca, 'XTick', 1:length(sitios), 'XTickLabel', sitios, 'FontSize', 10);
+xlabel('Sitio');
+ylabel('Rampa (%/min)');
+title('Boxplot de Variabilidad Solar por Sitio');
+grid on
+box on
+% --------------------- 3. CURVA DE DURACIÓN ---------------------
+figure('Name','3. Curva de Duración');
+hold on
+for a = 1:length(archivos)
+data = sort(abs(rampas_por_sitio{a}), 'descend');
+plot(1:length(data), data, 'LineWidth', 2, 'DisplayName', sitios{a});
+end
+xlabel('Índice');
+ylabel('|Rampa| (%/min)');
+title('Curva de Duración de Rampas');
+legend show; grid on
+% --------------------- 5. FRECUENCIA ACUMULADA ---------------------
+figure('Name','5. Frecuencia Acumulada');
+hold on
+for a = 1:length(archivos)
+data = sort(abs(rampas_por_sitio{a}));
+y = (1:length(data)) / length(data);
+plot(data, y*100, 'LineWidth', 2, 'DisplayName', sitios{a});
+end
+xlabel('|Rampa| (%/min)');
+ylabel('Frecuencia acumulada (%)');
+title('Distribución Acumulada de Variabilidad');
+legend show; grid on
+% --------------------- 6. PROMEDIO DE RAMPAS POR HORA ---------------------
+figure('Name','6. Promedio de Rampas por Hora');
+horas_plot = 6:18; % rango horario
+for a = 1:length(archivos)
+datos_hora = rampas_por_hora{a};
+promedio_rampas = zeros(1, length(horas_plot));
+for idx = 1:length(horas_plot)
+rampas_h = datos_hora{idx}; % índice 1 a 13
+if ~isempty(rampas_h)
+promedio_rampas(idx) = mean(abs(rampas_h)); % promedio de rampas
+absolutas
+else
+promedio_rampas(idx) = NaN; % sin datos
+end
+end
+subplot(1, length(archivos), a)
+bar(horas_plot, promedio_rampas, 'FaceColor', colors(a,:));
+title(['Promedio de rampas por hora - ', sitios{a}]);
+xlabel('Hora del día');
+ylabel('Rampa promedio (%/min)');
+set(gca, 'XTick', horas_plot);
+grid on
