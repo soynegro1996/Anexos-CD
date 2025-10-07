@@ -1,0 +1,140 @@
+object case, elmRes;
+set resObjs;
+int numRows, i, t;
+double prevValue, currValue, P_FV_consigna, Pg_prev, Ebat_prev, r, K, u, Pbat, Ebat, Ebat1, Err, SOC, SOCI, ST, Cbat, maxEbat, minEbat;
+int Nr;
+double Ebatref;  ! Energía de referencia de la batería en Wh
+int isFirstStep;  ! Flag para asegurarse de que la energía en el primer paso sea 0
+
+Nr = 28600;                    ! Número de registros
+r =1333.33;                         ! Rampa máxima permitida (ajustar si es necesario)
+Ebatref = 0;               ! Inicializamos la energía de referencia (ajustarla según sea necesario)
+K = 0;                         ! Ganancia de la corrección
+maxEbat = 1;                ! Energía máxima acumulada en Wh
+minEbat =0;               ! Energía mínima acumulada en Wh
+
+! Inicialización de los vectores
+ClearOutputWindow();
+Vector.Init(Nr);               ! Potencia FV medida
+Vecto.Init(Nr);                ! Potencia suavizada Pg
+Vect.Init(Nr);                 ! Diferencia de potencia (u)
+Vec.Init(Nr);                  ! Potencia de la batería (Pbat)
+Ve.Init(Nr);                   ! Energía de la batería (Ebat)
+V.Init(Nr);                    ! Error (Err)
+VSOC.Init(Nr);                 ! Estado de carga (SOC)
+
+! Cargar el caso activo
+case = GetActiveStudyCase();
+
+! Cargar los resultados del estudio
+resObjs = case.GetContents('Results.ElmRes', 1);
+elmRes = resObjs.First();
+elmRes.Load();
+
+numRows = elmRes.GetNumberOfRows();
+inde = elmRes.FindColumn('m:P:bus1');  ! Buscar la columna de potencia fotovoltaica (ajustar si es necesario)
+
+if (inde < 0) {
+    printf('No se encontró la columna m:P:bus1');
+    elmRes.Release();
+    exit(1);
+}
+
+prevValue = 0.0;
+Pg_prev = 0.0;
+Ebat = 0.0;   ! Inicializar Ebat (energía de la batería) a cero
+Ebat1 = 0.0;   ! Inicializar la energía de la batería para el siguiente paso
+isFirstStep = 0;  ! Inicializar el flag de primer paso
+
+! Bucle para calcular potencias y energía
+for (i = 1; i < numRows; i += 1) {
+    elmRes.GetValue(currValue, i, inde);  ! Obtener la potencia fotovoltaica medida
+    P_FV_consigna = currValue + K * Err;  ! Calcular la potencia fotovoltaica corregida
+
+    if (P_FV_consigna >= 0) {
+        Pg = currValue;  ! Potencia fotovoltaica real
+    } else {
+        Pg = P_FV_consigna;  ! Potencia fotovoltaica suavizada
+    }
+
+    ! Aplicar la rampa máxima
+    if (abs(Pg - Pg_prev) > r) {
+        if (Pg - Pg_prev > 0) {
+            Pg = Pg_prev + r;
+        } else {
+            Pg = Pg_prev - r;
+        }
+    }
+
+    u = Pg - Pg_prev;        ! Diferencia de potencia entre el valor actual y el anterior
+    Pbat = Pg - currValue;   ! Potencia de la batería (diferencia entre la potencia ajustada y la medida)
+
+    ! Evitar acumular energía en el primer paso
+    if (isFirstStep) {
+        Ebat = 0.0;  ! No acumular energía en el primer paso
+        isFirstStep = 0;  ! Cambiar el flag para el resto de los pasos
+    } else {
+        Ebat = Ebat + (Pbat * 4 / 3600);  ! Energía de la batería en Wh (ajustando para tiempo en horas)
+    }
+
+    Err = Ebatref - Ebat;  ! Error acumulado (diferencia entre la energía de referencia y la acumulada)
+
+    ! Imprimir los valores para cada paso de tiempo
+    printf('Diferencia de potencia entre %d y %d: %.4f', i, i + 1, currValue);
+    printf('Número de filas cargadas: %d', numRows);
+
+    printf('Potencia Suavizada %d y %d: %.4f', i, i + 1, Pg);
+    printf('Potencia Suavizada %d y %d: %.4f', i, i + 1, u);
+    printf('Potencia de la batería %d y %d: %.4f', i, i + 1, Pbat);
+    printf('Energía de la batería %d y %d: %.4f', i, i + 1, Ebat);
+    printf('Error %d y %d: %.4f', i, i + 1, Err);
+
+    prevValue = currValue;     ! Actualizar el valor previo para el siguiente ciclo
+    Pg_prev = Pg;              ! Actualizar la potencia suavizada previa
+    Ebatref = Ebat1;           ! Actualizar la energía de referencia
+    Ebat1 = Ebat;              ! Actualizar la energía de la batería
+
+    ! Almacenar los valores en los vectores
+    Vector.Set(i, currValue/1000);  ! Potencia FV medida
+    Vecto.Set(i, Pg/1000);          ! Potencia suavizada
+    Vect.Set(i, u/1000);            ! Diferencia de potencia
+    Vec.Set(i, Pbat/1000);          ! Potencia de la batería
+    Ve.Set(i, Ebat/1000;           ! Energía de la batería
+    V.Set(i, Err);             ! Error
+}
+
+! Segundo bucle para calcular SOC y capacidad de la batería
+for (i = 1; i <= numRows; i += 1) {
+    Ebat = Ve.Get(i);  ! Obtener la energía de la batería acumulada en el tiempo i
+    SOC = (Ebat / maxEbat) * 100;  ! Calcular el SOC (porcentaje)
+
+    Cbat = maxEbat - minEbat;  ! Capacidad de la batería
+    Cbat = 2 * Cbat;  ! Duplicar para evitar fluctuaciones en la capacidad
+
+    ! Imprimir el SOC y la capacidad de la batería para cada paso de tiempo
+    printf('Estado de carga %d: %.2f%%', i, SOC);
+    printf('Capacidad de la batería %d: %.2f Wh', i, Cbat);
+
+    VSOC.Set(i, SOC);  ! Almacenar el SOC
+}
+
+! Guardar los resultados
+Results.Clear();
+Results.AddVars(this, 'b:X');
+Results.AddVars(this, 'b:T');
+Results.AddVars(this, 'b:Pg');
+Results.AddVars(this, 'b:PBAT');
+Results.AddVars(this, 'b:EBAT');
+Results.AddVars(this, 'b:ERR');
+Results.AddVars(this, 'b:vsoc');
+
+for (t = 1; t <= Nr; t += 1) {
+    X = Vector.Get(t);
+    T = Vecto.Get(t);
+    Pg = Vect.Get(t);
+    PBAT = Vec.Get(t);
+    EBAT = Ve.Get(t);
+    ERR = V.Get(t);
+    vsoc = VSOC.Get(t);
+    Results.Write();  ! Escribir los resultados para cada paso de tiempo
+}
